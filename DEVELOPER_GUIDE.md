@@ -15,9 +15,10 @@ This guide is written for Python developers who are new to NLP, machine learning
 7. [How BERT Works (Simplified)](#7-how-bert-works-simplified)
 8. [Training Process Explained](#8-training-process-explained)
 9. [Evaluation Metrics Explained](#9-evaluation-metrics-explained)
-10. [Customization Guide](#10-customization-guide)
-11. [Troubleshooting](#11-troubleshooting)
-12. [Glossary](#12-glossary)
+10. [Running on Google Colab (Recommended)](#10-running-on-google-colab-recommended)
+11. [Customization Guide](#11-customization-guide)
+12. [Troubleshooting](#12-troubleshooting)
+13. [Glossary](#13-glossary)
 
 ---
 
@@ -213,12 +214,12 @@ MODEL_NAME = "bert-base-uncased"
 OUTPUT_DIR = "saved_models/bert-agnews"
 NUM_LABELS = 4
 EPOCHS = 3
-BATCH_SIZE = 16
+BATCH_SIZE = 64
 ```
 
 - `NUM_LABELS`: AG News has 4 categories.
 - `EPOCHS`: One epoch = one full pass through the training data. 3 epochs means the model sees every training example 3 times.
-- `BATCH_SIZE`: How many examples the model processes before updating its weights. Larger = faster but uses more memory.
+- `BATCH_SIZE`: How many examples the model processes before updating its weights. Set to 64 for optimal T4 GPU utilization.
 
 #### Loading the Model
 
@@ -234,18 +235,23 @@ This loads BERT with an added **classification head** on top. The classification
 
 ```python
 training_args = TrainingArguments(
-    output_dir=OUTPUT_DIR,           # Where to save checkpoints
-    evaluation_strategy="epoch",     # Evaluate after each epoch
-    save_strategy="epoch",           # Save checkpoint after each epoch
-    learning_rate=2e-5,              # How big each weight update is
-    per_device_train_batch_size=16,  # Batch size for training
-    per_device_eval_batch_size=16,   # Batch size for evaluation
-    num_train_epochs=3,              # Number of passes through data
-    weight_decay=0.01,               # Prevents overfitting
-    load_best_model_at_end=True,     # Auto-load the best checkpoint
-    metric_for_best_model="accuracy",# Which metric determines "best"
-    logging_dir="./logs",            # Where to save training logs
-    logging_steps=100,               # Log progress every 100 steps
+    output_dir=OUTPUT_DIR,                    # Where to save checkpoints
+    eval_strategy="epoch",                    # Evaluate after each epoch
+    save_strategy="epoch",                    # Save checkpoint after each epoch
+    learning_rate=2e-5,                       # How big each weight update is
+    per_device_train_batch_size=BATCH_SIZE,   # 64 for T4 GPU
+    per_device_eval_batch_size=BATCH_SIZE * 2,# 128 for faster eval
+    num_train_epochs=EPOCHS,                  # Number of passes through data
+    weight_decay=0.01,                        # Prevents overfitting
+    load_best_model_at_end=True,              # Auto-load the best checkpoint
+    metric_for_best_model="accuracy",         # Which metric determines "best"
+    logging_dir="./logs",                     # Where to save training logs
+    logging_steps=100,                        # Log progress every 100 steps
+    fp16=True,                                # Mixed precision (2x speedup on GPU)
+    dataloader_num_workers=2,                 # Parallel data loading
+    dataloader_pin_memory=True,               # Faster CPU-to-GPU transfer
+    gradient_accumulation_steps=2,            # Simulates batch size of 128
+    optim="adamw_torch",                      # AdamW optimizer
 )
 ```
 
@@ -256,6 +262,14 @@ training_args = TrainingArguments(
 - **Weight decay (0.01):** A regularization technique that penalizes large weights. It prevents the model from memorizing the training data (overfitting).
 
 - **Evaluation strategy:** After each epoch, the model is tested on the validation/test set to see how well it generalizes.
+
+- **FP16 (Mixed Precision):** Uses 16-bit floating point numbers instead of 32-bit. This cuts memory usage in half and roughly doubles training speed on modern GPUs (T4, V100, A100) with no loss in accuracy.
+
+- **Gradient Accumulation:** Instead of updating weights after every batch of 64, the model accumulates gradients over 2 batches and updates once. This simulates a batch size of 128 (64 × 2), which improves training stability and convergence.
+
+- **Dataloader Workers:** Uses 2 subprocesses to load and preprocess data in parallel, so the GPU never waits for data.
+
+- **Pin Memory:** Locks CPU memory pages so the CPU-to-GPU data transfer uses DMA (direct memory access), which is faster.
 
 #### Metrics Function
 
@@ -296,6 +310,16 @@ trainer.train()
 trainer.save_model(OUTPUT_DIR)
 ```
 `trainer.train()` runs the training loop. `trainer.save_model()` saves the final model weights and configuration.
+
+#### GPU Detection
+
+```python
+if __name__ == "__main__":
+    print(f"Using device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
+    if torch.cuda.is_available():
+        print(f"GPU Name: {torch.cuda.get_device_name(0)}\n")
+```
+This prints the detected GPU at startup so you can verify you're using the correct device (e.g., "Tesla T4" on Colab).
 
 ---
 
@@ -527,36 +551,21 @@ Older models read text left-to-right or right-to-left. BERT reads the entire sen
 ### What Happens During One Training Step
 
 ```
-1. Take a batch of 16 examples
+1. Take a batch of 64 examples
 2. Tokenize them → input_ids, attention_mask
 3. Forward pass through BERT → logits (raw scores)
 4. Compute loss (cross-entropy between logits and true labels)
-5. Backward pass → compute gradients
-6. Optimizer updates weights using gradients
+5. Backward pass → compute gradients (accumulated, not yet applied)
+6. After 2 batches, average the gradients and update weights
 7. Repeat with next batch
 ```
-
-### Loss Function: Cross-Entropy
-
-Cross-entropy measures how far the model's predictions are from the correct answer.
-
-Example:
-- True label: Business (index 2)
-- Model's softmax output: `[0.05, 0.02, 0.88, 0.05]`
-- Loss: `-log(0.88) = 0.128` (low loss = good prediction)
-
-If the model was wrong:
-- True label: Business (index 2)
-- Model's softmax output: `[0.60, 0.05, 0.20, 0.15]`
-- Loss: `-log(0.20) = 1.609` (high loss = bad prediction)
-
-The optimizer's job is to minimize this loss across all training examples.
 
 ### What "Epochs" Mean
 
 - **1 epoch** = the model has seen every training example once
-- With 120,000 examples and batch size 16: 120,000 / 16 = 7,500 steps per epoch
-- With 3 epochs: 7,500 × 3 = 22,500 total training steps
+- With 120,000 examples and batch size 64: 120,000 / 64 = 1,875 steps per epoch
+- With gradient accumulation of 2: 1,875 / 2 = 938 weight updates per epoch
+- With 3 epochs: 1,875 × 3 = 5,625 total training steps
 
 ### Why a Small Learning Rate?
 
@@ -608,7 +617,69 @@ Each class's F1 is weighted by how many examples it has. This matters when class
 
 ---
 
-## 10. Customization Guide
+## 10. Running on Google Colab (Recommended)
+
+If you don't have a powerful machine with a dedicated GPU, you can train this model for free on **Google Colab**. The training script is specifically optimized for the **T4 GPU** that Colab provides.
+
+### Why Google Colab?
+
+| Feature | Your Local Machine (CPU) | Google Colab (T4 GPU) |
+|---------|-------------------------|----------------------|
+| Training time (3 epochs) | ~2-4 hours | ~10-15 minutes |
+| Memory | Limited by your RAM | 16 GB VRAM |
+| Mixed precision (FP16) | Not supported | Supported (2x speedup) |
+| Cost | Free but slow | Free with Google account |
+
+### Step-by-Step Guide
+
+**Step 1:** Go to [Google Colab](https://colab.research.google.com/) and create a new notebook.
+
+**Step 2:** Change the runtime to GPU:
+- Click **Runtime** → **Change runtime type**
+- Select **T4 GPU** from the Hardware accelerator dropdown
+- Click **Save**
+
+**Step 3:** Upload your project files or clone your GitHub repo:
+```python
+# Option A: Upload files manually using the file browser on the left
+# Option B: Clone from GitHub
+!git clone https://github.com/your-username/News-Topic-Classifier-Using-BERT.git
+%cd News-Topic-Classifier-Using-BERT
+```
+
+**Step 4:** Install dependencies:
+```python
+!pip install -r requirements.txt
+```
+
+**Step 5:** Run training:
+```python
+!python train.py
+```
+
+**Step 6:** After training, download the saved model:
+```python
+# Download the model as a zip file
+!zip -r saved_models.zip saved_models/
+from google.colab import files
+files.download("saved_models.zip")
+```
+
+### Training Script Optimizations for T4 GPU
+
+The `train.py` script includes these T4-specific optimizations:
+
+| Optimization | What It Does | Benefit |
+|-------------|-------------|---------|
+| `fp16=True` | Uses 16-bit floating point math | 2x faster, half the memory |
+| `BATCH_SIZE = 64` | Larger batches fit in T4's 16GB VRAM | Fewer steps, faster training |
+| `gradient_accumulation_steps=2` | Simulates batch size of 128 | Better convergence |
+| `dataloader_num_workers=2` | Parallel data loading | GPU never waits for data |
+| `dataloader_pin_memory=True` | Faster CPU-to-GPU transfer | Reduced data transfer time |
+
+---
+
+## 11. Customization Guide
 
 ### Change the Number of Training Epochs
 
@@ -621,8 +692,10 @@ EPOCHS = 3  # Change to 4 or 5 for potentially better results
 
 In `train.py`, line 10:
 ```python
-BATCH_SIZE = 16  # Reduce to 8 if you get out-of-memory errors
+BATCH_SIZE = 64  # Default for T4 GPU. Reduce to 32 or 16 if you get out-of-memory errors
 ```
+
+Note: The effective batch size is `BATCH_SIZE × gradient_accumulation_steps`. With the default settings, the effective batch size is 128 (64 × 2).
 
 ### Change the Learning Rate
 
@@ -662,7 +735,13 @@ Note: BERT's maximum is 512 tokens.
 
 ### Use GPU Training
 
-The `Trainer` automatically uses GPU if available. To force CPU:
+The `Trainer` automatically uses GPU if available. The script prints your device at startup:
+```
+Using device: cuda
+GPU Name: Tesla T4
+```
+
+To force CPU (for debugging):
 ```python
 training_args = TrainingArguments(
     ...
@@ -672,7 +751,7 @@ training_args = TrainingArguments(
 
 ---
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 ### Out of Memory (OOM) Error
 
@@ -680,7 +759,12 @@ training_args = TrainingArguments(
 
 **Fix:** Reduce `BATCH_SIZE` in `train.py`:
 ```python
-BATCH_SIZE = 8  # or even 4
+BATCH_SIZE = 32  # or even 16
+```
+
+If you reduce the batch size, you may want to increase `gradient_accumulation_steps` to maintain the same effective batch size:
+```python
+gradient_accumulation_steps=4,  # Effective batch size = 16 × 4 = 64
 ```
 
 ### Slow Training
@@ -688,19 +772,18 @@ BATCH_SIZE = 8  # or even 4
 **Cause:** Running on CPU instead of GPU, or batch size too small.
 
 **Fix:** 
-- Use a GPU (Google Colab free tier works)
+- Use a GPU (Google Colab free tier with T4 GPU is recommended)
+- Ensure `fp16=True` is set in `TrainingArguments`
 - Increase `BATCH_SIZE` if memory allows
 - Use `distilbert-base-uncased` instead of `bert-base-uncased`
 
-### "CUDA out of memory" Error
+### "fp16 not supported" Error
 
-**Fix:**
+**Cause:** Your GPU doesn't support mixed precision (older GPUs).
+
+**Fix:** Set `fp16=False` in `TrainingArguments`:
 ```python
-BATCH_SIZE = 4
-```
-Or enable gradient accumulation in `TrainingArguments`:
-```python
-gradient_accumulation_steps=4,  # Simulates larger batch size
+fp16=False,  # Disable mixed precision
 ```
 
 ### Model Not Learning (Loss Not Decreasing)
@@ -727,7 +810,7 @@ pip install -r requirements.txt
 
 ---
 
-## 12. Glossary
+## 13. Glossary
 
 | Term | Definition |
 |------|-----------|
@@ -743,6 +826,8 @@ pip install -r requirements.txt
 | **Epoch** | One full pass through the training data |
 | **Fine-Tuning** | Training a pre-trained model on a specific task |
 | **Forward Pass** | Computing the model's output from input |
+| **FP16 / Mixed Precision** | Using 16-bit floats instead of 32-bit for faster training |
+| **Gradient Accumulation** | Accumulating gradients over multiple batches before updating weights |
 | **Gradient** | Direction and magnitude of weight change needed to reduce loss |
 | **Hugging Face** | Company/platform providing transformers, datasets, and model hub |
 | **Logit** | Raw, unnormalized model output score |

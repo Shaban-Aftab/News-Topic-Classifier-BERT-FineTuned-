@@ -7,7 +7,7 @@ MODEL_NAME = "bert-base-uncased"
 OUTPUT_DIR = "saved_models/bert-agnews"
 NUM_LABELS = 4
 EPOCHS = 3
-BATCH_SIZE = 16
+BATCH_SIZE = 64 
 
 def train_model():
     tokenized_datasets = load_and_tokenize_data()
@@ -24,13 +24,18 @@ def train_model():
         save_strategy="epoch",
         learning_rate=2e-5,
         per_device_train_batch_size=BATCH_SIZE,
-        per_device_eval_batch_size=BATCH_SIZE,
+        per_device_eval_batch_size=BATCH_SIZE * 2, 
         num_train_epochs=EPOCHS,
         weight_decay=0.01,
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
         logging_dir="./logs",
         logging_steps=100,
+        fp16=True,
+        dataloader_num_workers=2,
+        dataloader_pin_memory=True,
+        gradient_accumulation_steps=2,
+        optim="adamw_torch",
     )
     
     def compute_metrics(eval_pred):
@@ -59,4 +64,8 @@ def train_model():
     return trainer
 
 if __name__ == "__main__":
+    print(f"Using device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
+    if torch.cuda.is_available():
+        print(f"GPU Name: {torch.cuda.get_device_name(0)}\n")
+        
     trainer = train_model()
