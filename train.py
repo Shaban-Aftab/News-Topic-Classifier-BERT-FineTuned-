@@ -1,7 +1,6 @@
 import torch
 from transformers import AutoModelForSequenceClassification, TrainingArguments, Trainer
 from preprocess import load_and_tokenize_data
-import os
 
 MODEL_NAME = "bert-base-uncased"
 OUTPUT_DIR = "saved_models/bert-agnews"
