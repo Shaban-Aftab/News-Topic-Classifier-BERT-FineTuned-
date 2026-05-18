@@ -1,6 +1,6 @@
 # Developer Guide: News Topic Classifier Using BERT
 
-This guide is written for Python developers who are new to NLP, machine learning, and deep learning. It explains every concept, every file, and every line of code in this project.
+This guide is written for developers who are new to NLP, machine learning, and deep learning. It explains every concept, every file, and every line of code in this project.
 
 ---
 

@@ -63,3 +63,5 @@ evaluate.py      - Model evaluation
 app.py           - Streamlit deployment
 saved_models/    - Trained model and tokenizer
 ```
+
+#### If you want to understand the code better check `DEVELOPER_GUIDE.md` for detailed explanations of each component and how they work together.
