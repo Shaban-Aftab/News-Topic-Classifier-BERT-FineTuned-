@@ -1,3 +1,9 @@
+import sys
+import os
+
+# Dynamically inject the app's parent directory into sys.path to guarantee local module resolution on Streamlit Cloud
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import streamlit as st
 import torch
 import torch.nn as nn
